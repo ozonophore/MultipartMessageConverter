@@ -1,0 +1,21 @@
+plugins {
+    id 'java'
+}
+
+group = 'su.common'
+version = '0.0.1-SNAPSHOT'
+sourceCompatibility = '1.8'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.springframework:spring-web:5.0.2.RELEASE'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.10.3'
+    implementation "commons-fileupload:commons-fileupload:1.4"
+}
+
+test {
+    useJUnitPlatform()
+}
