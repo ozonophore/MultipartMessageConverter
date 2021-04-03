@@ -13,6 +13,8 @@ import org.springframework.http.converter.HttpMessageConverter;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.http.converter.HttpMessageNotWritableException;
 import org.springframework.http.converter.support.AllEncompassingFormHttpMessageConverter;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
 
 import java.io.ByteArrayInputStream;
@@ -23,11 +25,11 @@ import java.io.InputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Parameter;
+import java.lang.reflect.ParameterizedType;
 import java.net.URI;
 import java.net.URL;
 import java.util.AbstractMap;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -35,7 +37,6 @@ import java.util.stream.Collectors;
 
 /**
  * Implementation that allows converting multipart/form-data to DTO
- *
  */
 public class MultiPartMessageConverter implements HttpMessageConverter<Object> {
 
@@ -77,15 +78,19 @@ public class MultiPartMessageConverter implements HttpMessageConverter<Object> {
                 1024,
                 null);
 
-        Map<String, Object> map = parsContent(multipartStream, clazz);
+        MultiValueMap<String, Object> map = parsContent(multipartStream, clazz);
         Constructor constructor = clazz.getConstructors()[0];
         Parameter[] parameters = constructor.getParameters();
         Object[] args = new Object[parameters.length];
         int index = 0;
         for (Parameter parameter : parameters) {
             JsonProperty jsonProperty = parameter.getAnnotation(JsonProperty.class);
-            Object value = (jsonProperty != null) ? map.get(jsonProperty.value()) : map.get(parameter.getName());
-            args[index] = value;
+            final List<Object> values = (jsonProperty != null) ? map.get(jsonProperty.value()) : map.get(parameter.getName());
+            if (List.class.isAssignableFrom(parameter.getType())) {
+                args[index] = values;
+            } else if (values != null && !values.isEmpty()) {
+                args[index] = values.get(0);
+            }
             index++;
         }
         try {
@@ -96,8 +101,8 @@ public class MultiPartMessageConverter implements HttpMessageConverter<Object> {
         }
     }
 
-    private Map<String, Object> parsContent(MultipartStream multipartStream, Class<?> clazz) throws IOException {
-        Map<String, Object> map = new HashMap<>();
+    private MultiValueMap<String, Object> parsContent(MultipartStream multipartStream, Class<?> clazz) throws IOException {
+        final MultiValueMap<String, Object> map = new LinkedMultiValueMap<>();
         Map<String, Field> fields = Arrays.stream(clazz.getFields()).collect(Collectors.toMap(Field::getName, Function.identity()));
         boolean nextPart = multipartStream.skipPreamble();
         while (nextPart) {
@@ -113,13 +118,18 @@ public class MultiPartMessageConverter implements HttpMessageConverter<Object> {
             mediaTypePart.getParameters();
             if (MediaType.TEXT_PLAIN.getType().equals(mediaTypePart.getType()) &&
                     MediaType.TEXT_PLAIN.getSubtype().equals(mediaTypePart.getSubtype())) {
-                map.put(contentDisposition.getName(), bodyStream.toString());
+                map.add(contentDisposition.getName(), bodyStream.toString());
             } else if (MediaType.APPLICATION_OCTET_STREAM.equals(mediaTypePart)) {
-                map.put(contentDisposition.getName(), new ByteResource(contentDisposition.getFilename(), bodyStream.toByteArray()));
+                map.add(contentDisposition.getName(), new ByteResource(contentDisposition.getFilename(), bodyStream.toByteArray()));
             } else if (MediaType.APPLICATION_JSON.equals(mediaTypePart)) {
                 Field field = fields.get(contentDisposition.getName());
                 if (field != null) {
-                    map.put(field.getName(), objectMapper.readValue(bodyStream.toByteArray(), field.getType()));
+                    if (List.class.isAssignableFrom(field.getType())) {
+                        final Class genericClass = (Class) ((ParameterizedType) field.getGenericType()).getActualTypeArguments()[0];
+                        map.add(field.getName(), objectMapper.readValue(bodyStream.toByteArray(), genericClass));
+                    } else {
+                        map.add(field.getName(), objectMapper.readValue(bodyStream.toByteArray(), field.getType()));
+                    }
                 }
             }
             bodyStream.close();
